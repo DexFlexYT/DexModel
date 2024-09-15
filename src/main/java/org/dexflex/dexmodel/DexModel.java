@@ -40,7 +40,7 @@ public class DexModel implements ModInitializer {
 									.executes(context -> {
 										String filename = StringArgumentType.getString(context, "filename");
 										ServerCommandSource source = context.getSource();
-										handleModelCommand(filename, 1.0f, 1.0f, "#FFFFFF", false, source);
+										handleModelCommand(filename, 1.0f, 1.0f, "#FFFFFF", false, "wireframe", source);
 										return 1;
 									})
 									.then(CommandManager.argument("scale", FloatArgumentType.floatArg(0.1f, 100.0f))
@@ -48,7 +48,7 @@ public class DexModel implements ModInitializer {
 												String filename = StringArgumentType.getString(context, "filename");
 												float scale = FloatArgumentType.getFloat(context, "scale");
 												ServerCommandSource source = context.getSource();
-												handleModelCommand(filename, scale, 1.0f, "#FFFFFF", false, source);
+												handleModelCommand(filename, scale, 1.0f, "#FFFFFF", false, "wireframe", source);
 												return 1;
 											})
 											.then(CommandManager.argument("particleSize", FloatArgumentType.floatArg(0.1f, 10.0f))
@@ -57,7 +57,7 @@ public class DexModel implements ModInitializer {
 														float scale = FloatArgumentType.getFloat(context, "scale");
 														float particleSize = FloatArgumentType.getFloat(context, "particleSize");
 														ServerCommandSource source = context.getSource();
-														handleModelCommand(filename, scale, particleSize, "#FFFFFF", false, source);
+														handleModelCommand(filename, scale, particleSize, "#FFFFFF", false, "wireframe", source);
 														return 1;
 													})
 													.then(CommandManager.argument("baseColor", StringArgumentType.string())
@@ -67,20 +67,23 @@ public class DexModel implements ModInitializer {
 																float particleSize = FloatArgumentType.getFloat(context, "particleSize");
 																String baseColor = StringArgumentType.getString(context, "baseColor");
 																ServerCommandSource source = context.getSource();
-																handleModelCommand(filename, scale, particleSize, baseColor, false, source);
+																handleModelCommand(filename, scale, particleSize, baseColor, false, "wireframe", source);
 																return 1;
 															})
 															.then(CommandManager.argument("showDepth", BoolArgumentType.bool())
-																	.executes(context -> {
-																		String filename = StringArgumentType.getString(context, "filename");
-																		float scale = FloatArgumentType.getFloat(context, "scale");
-																		float particleSize = FloatArgumentType.getFloat(context, "particleSize");
-																		String baseColor = StringArgumentType.getString(context, "baseColor");
-																		boolean showDepth = BoolArgumentType.getBool(context, "showDepth");
-																		ServerCommandSource source = context.getSource();
-																		handleModelCommand(filename, scale, particleSize, baseColor, showDepth, source);
-																		return 1;
-																	})
+																	.then(CommandManager.argument("displayType", StringArgumentType.string())
+																			.executes(context -> {
+																				String filename = StringArgumentType.getString(context, "filename");
+																				float scale = FloatArgumentType.getFloat(context, "scale");
+																				float particleSize = FloatArgumentType.getFloat(context, "particleSize");
+																				String baseColor = StringArgumentType.getString(context, "baseColor");
+																				boolean showDepth = BoolArgumentType.getBool(context, "showDepth");
+																				String displayType = StringArgumentType.getString(context, "displayType");
+																				ServerCommandSource source = context.getSource();
+																				handleModelCommand(filename, scale, particleSize, baseColor, showDepth, displayType, source);
+																				return 1;
+																			})
+																	)
 															)
 													)
 											)
@@ -91,24 +94,17 @@ public class DexModel implements ModInitializer {
 		});
 	}
 
-	private void handleModelCommand(String filename, float scale, float particleSize, String baseColor, boolean showDepth, ServerCommandSource source) {
+	private void handleModelCommand(String filename, float scale, float particleSize, String baseColor, boolean showDepth, String displayType, ServerCommandSource source) {
 		File configDir = new File("config/dexmodel");
 		File modelFile = new File(configDir, filename + ".ply");
 
 		if (modelFile.exists()) {
 			try {
-				// Read vertices and faces from the .ply file
 				List<Vec3d> vertices = PlyFileReader.readVertices(modelFile);
 				List<int[]> faces = PlyFileReader.readFaces(modelFile);
-
-				// Get the command position
 				Vec3d commandPosition = source.getPosition();
-
-				// Convert base color from hex string to normalized RGB values
 				float[] baseRGB = hexToNormalizedRGB(baseColor);
-
-				// Spawn particles at the vertices
-				spawnParticles(source.getWorld(), vertices, faces, commandPosition, scale, particleSize, baseRGB, showDepth);
+				spawnParticles(source.getWorld(), vertices, faces, commandPosition, scale, particleSize, baseRGB, showDepth, displayType);
 			} catch (IOException e) {
 				source.sendError(Text.literal("Couldn't load model due to wrong file formatting (expected ASCII)"));
 				LOGGER.error("Error reading .ply file: ", e);
@@ -149,145 +145,101 @@ public class DexModel implements ModInitializer {
 		return filenames;
 	}
 
-	private void spawnParticles(ServerWorld world, List<Vec3d> vertices, List<int[]> faces, Vec3d commandPosition, float scale, float particleSize, float[] baseRGB, boolean showDepth) {
+	private void spawnParticles(ServerWorld world, List<Vec3d> vertices, List<int[]> faces, Vec3d commandPosition, float scale, float particleSize, float[] baseRGB, boolean showDepth, String displayType) {
 		double minY = vertices.stream().mapToDouble(vertex -> vertex.y * scale).min().orElse(0);
 		double maxY = vertices.stream().mapToDouble(vertex -> vertex.y * scale).max().orElse(1);
 
-		// Spawn vertex particles
-		vertices.forEach(vertex -> {
-			double scaledX = vertex.x * scale;
-			double scaledY = vertex.y * scale;
-			double scaledZ = vertex.z * scale;
-
-			double x = scaledX + commandPosition.x;
-			double y = scaledY + commandPosition.y;
-			double z = scaledZ + commandPosition.z;
-
-			float[] color = getColorForDepth(baseRGB, scaledY, minY, maxY, showDepth);
-
-			DustParticleEffect particleEffect = new DustParticleEffect(new Vec3d(color[0], color[1], color[2]).toVector3f(), particleSize);
-			world.spawnParticles(particleEffect, x, y, z, 1, 0.0, 0.0, 0.0, 0.0);
-		});
-
-		// Spawn edge particles
-		faces.forEach(face -> {
-			for (int i = 0; i < face.length; i++) {
-				int vertex1 = face[i];
-				int vertex2 = face[(i + 1) % face.length];
-
-				Vec3d start = vertices.get(vertex1);
-				Vec3d end = vertices.get(vertex2);
-
-				double scaledStartX = start.x * scale;
-				double scaledStartY = start.y * scale;
-				double scaledStartZ = start.z * scale;
-
-				double scaledEndX = end.x * scale;
-				double scaledEndY = end.y * scale;
-				double scaledEndZ = end.z * scale;
-
-				double x1 = scaledStartX + commandPosition.x;
-				double y1 = scaledStartY + commandPosition.y;
-				double z1 = scaledStartZ + commandPosition.z;
-
-				double x2 = scaledEndX + commandPosition.x;
-				double y2 = scaledEndY + commandPosition.y;
-				double z2 = scaledEndZ + commandPosition.z;
-
-				// Calculate color for edges based on depth
-				float[] edgeColor = getColorForDepth(baseRGB, (scaledStartY + scaledEndY) / 2, minY, maxY, showDepth);
-
-				DustParticleEffect particleEffect = new DustParticleEffect(new Vec3d(edgeColor[0], edgeColor[1], edgeColor[2]).toVector3f(), particleSize / 2);
-				// Assuming we want to spawn particles along the edge
-				double distance = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2) + Math.pow(z2 - z1, 2));
-				int steps = (int) Math.ceil(distance / (particleSize / 2));
-
-				for (int j = 0; j <= steps; j++) {
-					double ratio = (double) j / steps;
-					double px = x1 + ratio * (x2 - x1);
-					double py = y1 + ratio * (y2 - y1);
-					double pz = z1 + ratio * (z2 - z1);
-					world.spawnParticles(particleEffect, px, py, pz, 1, 0.0, 0.0, 0.0, 0.0);
+		if ("points".equals(displayType)) {
+			// Spawn vertex particles
+			vertices.forEach(vertex -> {
+				double[] coords = getScaledCoords(vertex, scale, commandPosition);
+				float[] color = getColorForDepth(baseRGB, coords[1], minY, maxY, showDepth);
+				DustParticleEffect particleEffect = new DustParticleEffect(new Vec3d(color[0], color[1], color[2]).toVector3f(), particleSize);
+				world.spawnParticles(particleEffect, coords[0], coords[1], coords[2], 1, 0.0, 0.0, 0.0, 0.0);
+			});
+		} else if ("wireframe".equals(displayType)) {
+			// Spawn edge particles
+			faces.forEach(face -> {
+				for (int i = 0; i < face.length; i++) {
+					int vertex1 = face[i];
+					int vertex2 = face[(i + 1) % face.length];
+					Vec3d start = vertices.get(vertex1);
+					Vec3d end = vertices.get(vertex2);
+					double[] startCoords = getScaledCoords(start, scale, commandPosition);
+					double[] endCoords = getScaledCoords(end, scale, commandPosition);
+					float[] edgeColor = getColorForDepth(baseRGB, (startCoords[1] + endCoords[1]) / 2, minY, maxY, showDepth);
+					DustParticleEffect particleEffect = new DustParticleEffect(new Vec3d(edgeColor[0], edgeColor[1], edgeColor[2]).toVector3f(), particleSize / 2);
+					double distance = Math.sqrt(Math.pow(endCoords[0] - startCoords[0], 2) + Math.pow(endCoords[1] - startCoords[1], 2) + Math.pow(endCoords[2] - startCoords[2], 2));
+					int steps = (int) Math.ceil(distance / (particleSize / 2));
+					for (int j = 0; j <= steps; j++) {
+						double ratio = (double) j / steps;
+						double px = startCoords[0] + ratio * (endCoords[0] - startCoords[0]);
+						double py = startCoords[1] + ratio * (endCoords[1] - startCoords[1]);
+						double pz = startCoords[2] + ratio * (endCoords[2] - startCoords[2]);
+						world.spawnParticles(particleEffect, px, py, pz, 1, 0.0, 0.0, 0.0, 0.0);
+					}
 				}
-			}
-		});
+			});
+		} else if ("solid".equals(displayType)) {
+			// Spawn face particles
+			faces.forEach(face -> {
+				for (int i = 0; i < face.length; i++) {
+					int vertex1 = face[i];
+					int vertex2 = face[(i + 1) % face.length];
+					int vertex3 = face[(i + 2) % face.length];
+					Vec3d v1 = vertices.get(vertex1);
+					Vec3d v2 = vertices.get(vertex2);
+					Vec3d v3 = vertices.get(vertex3);
+					double[] v1Coords = getScaledCoords(v1, scale, commandPosition);
+					double[] v2Coords = getScaledCoords(v2, scale, commandPosition);
+					double[] v3Coords = getScaledCoords(v3, scale, commandPosition);
+					// Simple triangulation and particle effect for faces
+					float[] faceColor = getColorForDepth(baseRGB, (v1Coords[1] + v2Coords[1] + v3Coords[1]) / 3, minY, maxY, showDepth);
+					DustParticleEffect particleEffect = new DustParticleEffect(new Vec3d(faceColor[0], faceColor[1], faceColor[2]).toVector3f(), particleSize);
+					int steps = 20; // Example value for density
+					for (int j = 0; j < steps; j++) {
+						double t1 = Math.random();
+						double t2 = Math.random();
+						if (t1 + t2 > 1) {
+							t1 = 1 - t1;
+							t2 = 1 - t2;
+						}
+						double px = v1Coords[0] + t1 * (v2Coords[0] - v1Coords[0]) + t2 * (v3Coords[0] - v1Coords[0]);
+						double py = v1Coords[1] + t1 * (v2Coords[1] - v1Coords[1]) + t2 * (v3Coords[1] - v1Coords[1]);
+						double pz = v1Coords[2] + t1 * (v2Coords[2] - v1Coords[2]) + t2 * (v3Coords[2] - v1Coords[2]);
+						world.spawnParticles(particleEffect, px, py, pz, 1, 0.0, 0.0, 0.0, 0.0);
+					}
+				}
+			});
+		}
+	}
 
-		// Spawn face particles
-		faces.forEach(face -> {
-			for (int i = 0; i < face.length; i++) {
-				int vertex1 = face[i];
-				int vertex2 = face[(i + 1) % face.length];
-				int vertex3 = face[(i + 2) % face.length];
+	private double[] getScaledCoords(Vec3d vec, float scale, Vec3d offset) {
+		return new double[]{
+				(vec.x * scale) + offset.x,
+				(vec.y * scale) + offset.y,
+				(vec.z * scale) + offset.z
+		};
+	}
 
-				Vec3d v1 = vertices.get(vertex1);
-				Vec3d v2 = vertices.get(vertex2);
-				Vec3d v3 = vertices.get(vertex3);
-
-				double scaledX1 = v1.x * scale;
-				double scaledY1 = v1.y * scale;
-				double scaledZ1 = v1.z * scale;
-
-				double scaledX2 = v2.x * scale;
-				double scaledY2 = v2.y * scale;
-				double scaledZ2 = v2.z * scale;
-
-				double scaledX3 = v3.x * scale;
-				double scaledY3 = v3.y * scale;
-				double scaledZ3 = v3.z * scale;
-
-				double x1 = scaledX1 + commandPosition.x;
-				double y1 = scaledY1 + commandPosition.y;
-				double z1 = scaledZ1 + commandPosition.z;
-
-				double x2 = scaledX2 + commandPosition.x;
-				double y2 = scaledY2 + commandPosition.y;
-				double z2 = scaledZ2 + commandPosition.z;
-
-				double x3 = scaledX3 + commandPosition.x;
-				double y3 = scaledY3 + commandPosition.y;
-				double z3 = scaledZ3 + commandPosition.z;
-
-				// Calculate color for faces based on depth
-				float[] faceColor = getColorForDepth(baseRGB, (scaledY1 + scaledY2 + scaledY3) / 3, minY, maxY, showDepth);
-
-				DustParticleEffect particleEffect = new DustParticleEffect(new Vec3d(faceColor[0], faceColor[1], faceColor[2]).toVector3f(), particleSize);
-				// Simple approach to add particles to the center of the face
-				double cx = (x1 + x2 + x3) / 3;
-				double cy = (y1 + y2 + y3) / 3;
-				double cz = (z1 + z2 + z3) / 3;
-				world.spawnParticles(particleEffect, cx, cy, cz, 1, 0.0, 0.0, 0.0, 0.0);
-			}
-		});
+	private float[] hexToNormalizedRGB(String hex) {
+		hex = hex.replace("#", "");
+		int r = Integer.parseInt(hex.substring(0, 2), 16);
+		int g = Integer.parseInt(hex.substring(2, 4), 16);
+		int b = Integer.parseInt(hex.substring(4, 6), 16);
+		return new float[]{r / 255.0f, g / 255.0f, b / 255.0f};
 	}
 
 	private float[] getColorForDepth(float[] baseRGB, double y, double minY, double maxY, boolean showDepth) {
 		if (showDepth) {
-			// Normalize Y value between 0 and 1
-			double normalizedHeight = (y - minY) / (maxY - minY);
-			// Calculate depth color based on normalized height
-			return new float[] {
-					(float) (baseRGB[0] * normalizedHeight),
-					(float) (baseRGB[1] * normalizedHeight),
-					(float) (baseRGB[2] * normalizedHeight)
+			float depthFactor = (float) (y - minY) / (float) (maxY - minY);
+			return new float[]{
+					baseRGB[0] * depthFactor,
+					baseRGB[1] * depthFactor,
+					baseRGB[2] * depthFactor
 			};
 		} else {
-			// Return the base color when depth is not shown
 			return baseRGB;
 		}
-	}
-
-	private float[] hexToNormalizedRGB(String hex) {
-		// Remove hash symbol if present
-		if (hex.startsWith("#")) {
-			hex = hex.substring(1);
-		}
-		// Parse hex to integer
-		int color = Integer.parseInt(hex, 16);
-		// Extract RGB components and normalize to range [0, 1]
-		return new float[] {
-				((color >> 16) & 0xFF) / 255.0f,
-				((color >> 8) & 0xFF) / 255.0f,
-				(color & 0xFF) / 255.0f
-		};
 	}
 }
